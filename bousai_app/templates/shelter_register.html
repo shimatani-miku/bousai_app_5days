@@ -18,6 +18,36 @@
     <label for="name">避難所名（必須）</label><br>
     <input type="text" id="name" name="name">
   </p>
+  <fieldset>
+    <legend>対応する災害種別（1つ以上選択）</legend>
+    {% for hazard_type in hazard_types %}
+    <label>
+      <input type="checkbox" name="hazards" value="{{ hazard_type }}"
+        {% if hazard_type in selected_hazards|default([]) %}checked{% endif %}>
+      {{ hazard_type }}
+    </label><br>
+    {% endfor %}
+  </fieldset>
+  <fieldset>
+    <legend>ペットの受け入れ可否（必須）</legend>
+    <label>
+      <input type="radio" name="pets_allowed" value="true"
+        {% if selected_pets_allowed|default('') == 'true' %}checked{% endif %}>
+      ペット可
+    </label><br>
+    <label>
+      <input type="radio" name="pets_allowed" value="false"
+        {% if selected_pets_allowed|default('') == 'false' %}checked{% endif %}>
+      ペット不可
+    </label>
+  </fieldset>
+  <p>
+    <label>
+      <input type="checkbox" name="barrier_free" value="true"
+        {% if selected_barrier_free|default(false) %}checked{% endif %}>
+      バリアフリーに対応
+    </label>
+  </p>
   <p><button type="submit">登録</button></p>
 </form>
 {% endblock %}

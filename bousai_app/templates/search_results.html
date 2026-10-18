@@ -2,11 +2,31 @@
 
 {% block content %}
 <h2>検索結果</h2>
+{% if keyword %}
+  <p>キーワード: {{ keyword }}</p>
+{% endif %}
+{% if selected_hazards %}
+  <p>災害の種類: {{ selected_hazards|join('・') }}</p>
+{% endif %}
+{% if selected_pet_statuses %}
+  <p>ペットの受け入れ: {{ selected_pet_statuses|join('・') }}</p>
+{% endif %}
 
 {% if results %}
   <ul>
     {% for shelter in results %}
-    <li>{{ shelter.name }}</li>
+    <li>
+      {{ shelter.name }}
+      {% if shelter.hazards %}
+        （対応: {{ shelter.hazards|join('・') }}）
+      {% endif %}
+      {% if shelter.pets_allowed is defined %}
+        （ペット{{ '可' if shelter.pets_allowed else '不可' }}）
+      {% endif %}
+      {% if shelter.barrier_free %}
+        （バリアフリー）
+      {% endif %}
+    </li>
     {% endfor %}
   </ul>
 {% else %}

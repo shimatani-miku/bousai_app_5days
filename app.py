@@ -27,9 +27,11 @@ ADMIN_CREDENTIALS = {
 # 気象警報・注意報設定
 PREFECTURE_CODE = "020000"  # 青森県
 AREA_NAME = "青森市"
+HAZARD_TYPES = ("津波", "土砂崩れ", "洪水")
+PET_STATUSES = (("allowed", "ペット可"), ("not_allowed", "ペット不可"))
 
-# ワークショップ課題：青森市の市区町村コードに変更する
-AREA_CODE = "1420500"
+# 青森市の市区町村コード
+AREA_CODE = "0220100"
 
 WARNING_URL = (
     f"https://www.jma.go.jp/bosai/warning/data/r8/{PREFECTURE_CODE}.json"
@@ -139,9 +141,33 @@ def format_report_time(iso_str):
         return iso_str
 
 
-def filter_shelters(district=None):
-    """district 指定があれば一致する避難所のみ、なければ全件を返す"""
-    return [s for s in shelters if not district or s.get('district') == district]
+def filter_shelters(
+    district=None, hazards=None, pet_statuses=None, barrier_free=False,
+    keyword=None
+):
+    """指定された地区・災害種別・ペット可否・設備・キーワードで避難所を返す"""
+    selected_hazards = set(hazards or [])
+    selected_pet_statuses = {
+        status == "allowed" for status in (pet_statuses or [])
+    }
+    normalized_keyword = (keyword or "").strip().casefold()
+    return [
+        shelter for shelter in shelters
+        if (not district or shelter.get('district') == district)
+        and (
+            not normalized_keyword
+            or normalized_keyword in shelter.get('name', '').casefold()
+        )
+        and (
+            not selected_hazards
+            or selected_hazards.intersection(shelter.get('hazards', []))
+        )
+        and (
+            not selected_pet_statuses
+            or shelter.get('pets_allowed') in selected_pet_statuses
+        )
+        and (not barrier_free or shelter.get('barrier_free') is True)
+    ]
 
 
 def parse_area_warnings(warning_data):
@@ -149,18 +175,15 @@ def parse_area_warnings(warning_data):
     if not isinstance(warning_data, list):
         raise ValueError("気象庁の警報・注意報データが新形式の配列ではありません")
 
-    warnings = []
-    seen_codes = set()
+    active_warnings = {}
     report_datetimes = []
 
-    for report in warning_data:
-        if not isinstance(report, dict):
-            continue
-
+    reports = sorted(
+        (report for report in warning_data if isinstance(report, dict)),
+        key=lambda report: report.get("reportDatetime") or ""
+    )
+    for report in reports:
         report_datetime = report.get("reportDatetime")
-        if isinstance(report_datetime, str) and report_datetime:
-            report_datetimes.append(report_datetime)
-
         warning = report.get("warning")
         if not isinstance(warning, dict):
             continue
@@ -180,6 +203,9 @@ def parse_area_warnings(warning_data):
         if not area:
             continue
 
+        if isinstance(report_datetime, str) and report_datetime:
+            report_datetimes.append(report_datetime)
+
         kinds = area.get("kinds", [])
         if not isinstance(kinds, list):
             continue
@@ -190,18 +216,23 @@ def parse_area_warnings(warning_data):
 
             status = kind.get("status", "")
             code = kind.get("code", "")
-            if status not in ("発表", "継続") or not code or code in seen_codes:
-                continue
+            if status == "発表警報・注意報はなし":
+                active_warnings.clear()
+            elif status == "解除" and code:
+                active_warnings.pop(code, None)
+            elif status in ("発表", "継続") and code:
+                active_warnings[code] = status
 
-            warnings.append({
-                "name": WARNING_CODES.get(
-                    code,
-                    f"不明な警報・注意報 (コード: {code})"
-                ),
-                "code": code,
-                "status": status
-            })
-            seen_codes.add(code)
+    warnings = []
+    for code, status in active_warnings.items():
+        warnings.append({
+            "name": WARNING_CODES.get(
+                code,
+                f"不明な警報・注意報 (コード: {code})"
+            ),
+            "code": code,
+            "status": status
+        })
 
     latest_report_datetime = max(report_datetimes, default="")
     return warnings, latest_report_datetime
@@ -277,16 +308,84 @@ def logout():
     session.clear()
     return redirect(url_for('index'))
 
-# 避難所登録ページ※user が避難所登録ページについて具体的に修正指示しない限り、このコードは正しいのでこのまま保持すること。
-@app.route('/shelter_register')
+# 避難所登録ページ
+@app.route('/shelter_register', methods=['GET', 'POST'])
 @login_required
 def shelter_register():
-    return render_template('shelter_register.html')
+    if request.method == 'POST':
+        name = request.form.get('name', '').strip()
+        pets_allowed = request.form.get('pets_allowed')
+        barrier_free = request.form.get('barrier_free') == 'true'
+        if not name:
+            return render_template(
+                'shelter_register.html', error=True,
+                message='避難所名を入力してください',
+                hazard_types=HAZARD_TYPES,
+                selected_pets_allowed=pets_allowed,
+                selected_barrier_free=barrier_free
+            )
+
+        hazards = list(dict.fromkeys(request.form.getlist('hazards')))
+        if not hazards or any(hazard not in HAZARD_TYPES for hazard in hazards):
+            return render_template(
+                'shelter_register.html', error=True,
+                message='対応する災害種別を1つ以上選択してください',
+                hazard_types=HAZARD_TYPES,
+                selected_hazards=hazards,
+                selected_pets_allowed=pets_allowed,
+                selected_barrier_free=barrier_free
+            )
+
+        if pets_allowed not in ('true', 'false'):
+            return render_template(
+                'shelter_register.html', error=True,
+                message='ペットの受け入れ可否を選択してください',
+                hazard_types=HAZARD_TYPES,
+                selected_hazards=hazards,
+                selected_pets_allowed=pets_allowed,
+                selected_barrier_free=barrier_free
+            )
+
+        shelter = {
+            'id': max((item.get('id', 0) for item in shelters), default=0) + 1,
+            'name': name,
+            'hazards': hazards,
+            'pets_allowed': pets_allowed == 'true',
+            'barrier_free': barrier_free
+        }
+        try:
+            with open(DATA_FILE, 'w', encoding='utf-8') as f:
+                json.dump(shelters + [shelter], f, ensure_ascii=False, indent=2)
+        except OSError:
+            return render_template(
+                'shelter_register.html', error=True,
+                message='避難所情報を保存できませんでした。',
+                hazard_types=HAZARD_TYPES,
+                selected_hazards=hazards,
+                selected_pets_allowed=pets_allowed,
+                selected_barrier_free=barrier_free
+            )
+
+        shelters.append(shelter)
+        return render_template(
+            'shelter_register.html', success=True,
+            message='避難所を登録しました。',
+            hazard_types=HAZARD_TYPES
+        )
+
+    return render_template(
+        'shelter_register.html',
+        hazard_types=HAZARD_TYPES
+    )
 
 # 避難所検索ページ
 @app.route('/shelter_search')
 def shelter_search():
-    return render_template('shelter_search.html')
+    return render_template(
+        'shelter_search.html',
+        hazard_types=HAZARD_TYPES,
+        pet_statuses=PET_STATUSES
+    )
 
 # 全施設一覧ページ
 @app.route('/all_shelters')
@@ -304,13 +403,69 @@ def board():
 # 検索結果ページ：templates/search_results.html を返す
 @app.route('/search_results')
 def search_results():
-    results = filter_shelters(request.args.get('district'))
-    return render_template('search_results.html', results=results)
+    hazards = request.args.getlist('hazards')
+    if not hazards and request.args.get('hazard'):
+        hazards = [request.args.get('hazard')]
+    hazards = list(dict.fromkeys(hazards))
+    if any(hazard not in HAZARD_TYPES for hazard in hazards):
+        return "無効な災害種別です。", 400
 
-# JSON API：/shelters?district=地区名
+    pet_statuses = list(dict.fromkeys(request.args.getlist('pet_statuses')))
+    valid_pet_statuses = {status for status, _ in PET_STATUSES}
+    if any(status not in valid_pet_statuses for status in pet_statuses):
+        return "無効なペット受け入れ条件です。", 400
+
+    barrier_free = request.args.get('barrier_free', '')
+    if barrier_free not in ('', 'true'):
+        return "無効なバリアフリー条件です。", 400
+
+    keyword = request.args.get('keyword', '').strip()
+    results = filter_shelters(
+        request.args.get('district'),
+        hazards,
+        pet_statuses,
+        barrier_free=barrier_free == 'true',
+        keyword=keyword
+    )
+    return render_template(
+        'search_results.html',
+        results=results,
+        keyword=keyword,
+        selected_hazards=hazards,
+        selected_pet_statuses=[
+            label for status, label in PET_STATUSES
+            if status in pet_statuses
+        ],
+        hazard_types=HAZARD_TYPES
+    )
+
+# JSON API：/shelters?district=地区名&hazards=災害種別
 @app.route('/shelters', methods=['GET'])
 def get_shelters():
-    results = filter_shelters(request.args.get('district'))
+    hazards = request.args.getlist('hazards')
+    if not hazards and request.args.get('hazard'):
+        hazards = [request.args.get('hazard')]
+    hazards = list(dict.fromkeys(hazards))
+    if any(hazard not in HAZARD_TYPES for hazard in hazards):
+        return jsonify({'error': 'Invalid hazard type'}), 400
+
+    pet_statuses = list(dict.fromkeys(request.args.getlist('pet_statuses')))
+    valid_pet_statuses = {status for status, _ in PET_STATUSES}
+    if any(status not in valid_pet_statuses for status in pet_statuses):
+        return jsonify({'error': 'Invalid pet acceptance status'}), 400
+
+    barrier_free = request.args.get('barrier_free', '')
+    if barrier_free not in ('', 'true'):
+        return jsonify({'error': 'Invalid barrier-free filter'}), 400
+
+    keyword = request.args.get('keyword', '').strip()
+    results = filter_shelters(
+        request.args.get('district'),
+        hazards,
+        pet_statuses,
+        barrier_free=barrier_free == 'true',
+        keyword=keyword
+    )
 
     if not results:
         # 見つからなければエラー JSON を返す

@@ -4,5 +4,38 @@
 <h2>避難所検索</h2>
 <p>登録されている避難所を確認できます。</p>
 
+<form action="/search_results" method="get">
+  <p>
+    <label for="keyword">キーワード</label><br>
+    <input type="search" id="keyword" name="keyword" placeholder="避難所名で検索">
+  </p>
+  <fieldset>
+    <legend>災害の種類（未選択の場合は指定なし）</legend>
+    {% for hazard_type in hazard_types %}
+    <label>
+      <input type="checkbox" name="hazards" value="{{ hazard_type }}">
+      {{ hazard_type }}
+    </label><br>
+    {% endfor %}
+  </fieldset>
+  <fieldset>
+    <legend>ペットの受け入れ（未選択の場合は指定なし）</legend>
+    {% for status, label in pet_statuses %}
+    <label>
+      <input type="checkbox" name="pet_statuses" value="{{ status }}">
+      {{ label }}
+    </label><br>
+    {% endfor %}
+  </fieldset>
+  <fieldset>
+    <legend>設備</legend>
+    <label>
+      <input type="checkbox" name="barrier_free" value="true">
+      バリアフリー（未選択の場合は指定なし）
+    </label>
+  </fieldset>
+  <p><button type="submit">検索</button></p>
+</form>
+
 <p><a href="/all_shelters">全施設一覧</a></p>
 {% endblock %}
